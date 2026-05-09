@@ -28,16 +28,15 @@ so the cohort denominator at *t*=0 has zero interpolation error.
 
 The **weighting** is also configurable:
 
-- **Count (default)** — every UTXO contributes equally regardless of
-  size. Robust to single whale moves but contaminated by exchange
-  consolidation, change outputs, and dust UTXOs that aren't really
-  hodler decisions. Closer to the population-cohort metaphor (each
-  "person" = each UTXO).
-- **BTC (sats-weighted)** — every UTXO weighted by its sat value.
-  Answers the economic question — *"what fraction of the capital
+- **BTC (default, sats-weighted)** — every UTXO weighted by its sat
+  value. Answers the economic question — *"what fraction of the capital
   onboarded in this epoch is still un-spent?"* — but very sensitive to
   single large actors (ETF custodians, treasury holders, exchange cold-
   wallet moves can produce visible cliffs).
+- **Count** — every UTXO contributes equally regardless of size. Robust
+  to single whale moves but contaminated by exchange consolidation,
+  change outputs, and dust UTXOs that aren't really hodler decisions.
+  Closer to the population-cohort metaphor (each "person" = each UTXO).
 
 Disagreement between the two views is itself informative: it tells you
 whether stickiness is broad-based across many holders or concentration-

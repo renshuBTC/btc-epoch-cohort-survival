@@ -133,8 +133,8 @@
     </label>
     <label>Weighting:&nbsp;
       <select id="weighting-select" title="Count: 1 UTXO = 1 unit. BTC: 1 sat = 1 unit. Count is robust to whales but contaminated by exchange consolidation/change outputs. BTC answers the economic question but is sensitive to single large actors.">
-        <option value="count" selected>Count (1 UTXO = 1)</option>
-        <option value="btc">BTC (sats-weighted)</option>
+        <option value="count">Count (1 UTXO = 1)</option>
+        <option value="btc" selected>BTC (sats-weighted)</option>
       </select>
     </label>
   </div>
@@ -144,7 +144,7 @@
       <div id="chart"></div>
       <div class="x-axis-label">Days post-onboarding</div>
     </div>
-    <div class="y-axis-label"><span id="y-axis-label-text">Survival rate (% of cohort UTXOs still un-spent)</span></div>
+    <div class="y-axis-label"><span id="y-axis-label-text">Survival rate (% of cohort BTC still un-spent)</span></div>
   </div>
   <div class="status" id="status">Loading BRK series ...</div>
   <div class="source-line">
@@ -187,7 +187,7 @@ const HALVING_DATES = [
 const PHASE_DAYS = Math.max(1, Math.floor((TODAY - HALVING_DATES[4]) / DAY_MS));
 
 let ONBOARDING_W   = 90;            // mutable via #window-select dropdown
-let WEIGHTING      = "count";       // "count" | "btc" — mutable via #weighting-select
+let WEIGHTING      = "btc";         // "count" | "btc" — mutable via #weighting-select
 
 // Map weighting mode → BRK metric-name suffix. Both endpoint families are
 // indexed identically (same /day1 grid, same band edges) so the only thing
