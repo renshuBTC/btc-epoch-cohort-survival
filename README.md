@@ -26,6 +26,23 @@ The onboarding window *W* is configurable via the dropdown (30, 60, 90,
 or 180 days). All four options correspond exactly to BRK age-band edges
 so the cohort denominator at *t*=0 has zero interpolation error.
 
+The **weighting** is also configurable:
+
+- **Count (default)** — every UTXO contributes equally regardless of
+  size. Robust to single whale moves but contaminated by exchange
+  consolidation, change outputs, and dust UTXOs that aren't really
+  hodler decisions. Closer to the population-cohort metaphor (each
+  "person" = each UTXO).
+- **BTC (sats-weighted)** — every UTXO weighted by its sat value.
+  Answers the economic question — *"what fraction of the capital
+  onboarded in this epoch is still un-spent?"* — but very sensitive to
+  single large actors (ETF custodians, treasury holders, exchange cold-
+  wallet moves can produce visible cliffs).
+
+Disagreement between the two views is itself informative: it tells you
+whether stickiness is broad-based across many holders or concentration-
+driven by a few large ones.
+
 ## Method
 
 For each epoch *N* (halving date *H<sub>N</sub>*) and onboarding window
@@ -51,9 +68,16 @@ exactly the original cohort.
 ## Data source
 
 All inputs come from a Bitcoin Research Kit (BRK) deployment at
-[bitview.space](https://bitview.space/api), specifically from the
-`utxos_under_<BAND>_old_utxo_count` endpoint family at daily resolution
-(`/api/series/<name>/day1`).
+[bitview.space](https://bitview.space/api), at daily resolution
+(`/api/series/<name>/day1`). Two endpoint families are used, one per
+weighting mode:
+
+- `utxos_under_<BAND>_old_utxo_count`  — count mode (1 UTXO = 1 unit)
+- `utxos_under_<BAND>_old_supply_sats` — BTC mode  (1 sat  = 1 unit)
+
+Each series is the cumulative quantity of UTXOs younger than `<BAND>`
+on that day. The active mode is fetched on first use and cached, so
+toggling back and forth is instant after the initial load.
 
 Bands fetched:
 
@@ -61,9 +85,9 @@ Bands fetched:
 1h  1w  1m  2m  3m  4m  5m  6m  1y  2y  3y  4y  5y  6y  7y  8y  10y  12y  15y
 ```
 
-For follow-up days falling between band edges, supply is linearly
-interpolated. Reliable below 6 months (1-month band spacing); coarser
-beyond, where bands widen to 6 and 12 months.
+For follow-up days falling between band edges, the cumulative quantity is
+linearly interpolated. Reliable below 6 months (1-month band spacing);
+coarser beyond, where bands widen to 6 and 12 months.
 
 ## Caveats
 

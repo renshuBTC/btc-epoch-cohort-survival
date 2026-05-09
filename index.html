@@ -14,13 +14,27 @@
 
   Data source
   ───────────
-  All inputs are pulled from a single BRK endpoint family at /api/series:
-      utxos_under_<BAND>_old_utxo_count   (one series per BAND in BANDS[])
+  All inputs are pulled from BRK endpoint families at /api/series:
+      utxos_under_<BAND>_old_utxo_count    (count-weighted: 1 UTXO = 1 unit)
+      utxos_under_<BAND>_old_supply_sats   (BTC-weighted:   1 sat  = 1 unit)
+  One series per BAND in BANDS[]. Toggle the weighting in the UI.
 
-  Each series gives, at daily resolution, the integer count of UTXOs that
-  were younger than BAND days at that day. Linear interpolation between
-  band edges fills the gaps between BRK's discrete bands (1h, 1w, 1m, 2m,
-  3m, 4m, 5m, 6m, 1y, 2y, …).
+  Each series gives, at daily resolution, the cumulative quantity (count
+  or supply) of UTXOs that were younger than BAND days at that day. Linear
+  interpolation between band edges fills the gaps between BRK's discrete
+  bands (1h, 1w, 1m, 2m, 3m, 4m, 5m, 6m, 1y, 2y, …).
+
+  Count vs BTC weighting
+  ──────────────────────
+  Count-weighted: each UTXO contributes equally regardless of size. Robust
+  to single whales but contaminated by exchange consolidation, change
+  outputs, dust. Closer to the population-cohort metaphor.
+  BTC-weighted: each UTXO weighted by sats. Answers the economic question
+  ("what fraction of the capital onboarded in this epoch is still un-
+  spent?") but very sensitive to single large actors (ETF custodians,
+  treasury holders, exchange cold-wallet moves). Disagreement between the
+  two views is informative — it tells you whether stickiness is broad-
+  based (many holders) or concentration-driven (a few large holders).
 
   Math
   ────
@@ -117,6 +131,12 @@
         <option value="180">180 days</option>
       </select>
     </label>
+    <label>Weighting:&nbsp;
+      <select id="weighting-select" title="Count: 1 UTXO = 1 unit. BTC: 1 sat = 1 unit. Count is robust to whales but contaminated by exchange consolidation/change outputs. BTC answers the economic question but is sensitive to single large actors.">
+        <option value="count" selected>Count (1 UTXO = 1)</option>
+        <option value="btc">BTC (sats-weighted)</option>
+      </select>
+    </label>
   </div>
   <div class="chart-legend" id="chart-legend"></div>
   <div class="chart-with-axes">
@@ -124,13 +144,14 @@
       <div id="chart"></div>
       <div class="x-axis-label">Days post-onboarding</div>
     </div>
-    <div class="y-axis-label"><span>Survival rate (% of cohort still un-spent)</span></div>
+    <div class="y-axis-label"><span id="y-axis-label-text">Survival rate (% of cohort UTXOs still un-spent)</span></div>
   </div>
-  <div class="status" id="status">Loading BRK count series ...</div>
+  <div class="status" id="status">Loading BRK series ...</div>
   <div class="source-line">
     Data: <a href="https://bitview.space/api" target="_blank" rel="noopener">bitview.space</a>
-    (Bitcoin Research Kit). All series fetched live at page-load from the
-    <code>utxos_under_X_old_utxo_count</code> family at <code>/api/series/&lt;name&gt;/day1</code>.
+    (Bitcoin Research Kit). Series fetched live at <code>/api/series/&lt;name&gt;/day1</code>
+    from <code>utxos_under_X_old_utxo_count</code> (count mode) or
+    <code>utxos_under_X_old_supply_sats</code> (BTC mode).
     Source code: open in your browser's <i>View Source</i>; CC0, no rights reserved.
   </div>
 </div>
@@ -166,6 +187,18 @@ const HALVING_DATES = [
 const PHASE_DAYS = Math.max(1, Math.floor((TODAY - HALVING_DATES[4]) / DAY_MS));
 
 let ONBOARDING_W   = 90;            // mutable via #window-select dropdown
+let WEIGHTING      = "count";       // "count" | "btc" — mutable via #weighting-select
+
+// Map weighting mode → BRK metric-name suffix. Both endpoint families are
+// indexed identically (same /day1 grid, same band edges) so the only thing
+// that changes between modes is which prefix is fetched and read.
+const METRIC_SUFFIX = {
+  count: "utxo_count",
+  btc:   "supply_sats",
+};
+function metricName(label, mode = WEIGHTING) {
+  return `utxos_under_${label}_old_${METRIC_SUFFIX[mode]}`;
+}
 
 const EPOCHS = [
   { num: 1, name: "Epoch 1",                                                 start: HALVING_DATES[0], color: getCSS("--c1"), width: 2 },
@@ -182,10 +215,12 @@ const EPOCHS = [
   if (el) el.textContent = String(PHASE_DAYS);
 }
 
-// BRK age-band edges, in days. Each maps to a series named
-// `utxos_under_<label>_old_utxo_count` exposed at /day1 resolution.
-// Note that BRK uses "1h" as the smallest cumulative band — there is no
-// utxos_under_1d series. Linear interpolation fills gaps between edges.
+// BRK age-band edges, in days. Each maps to a pair of series named
+// `utxos_under_<label>_old_utxo_count` (count) and
+// `utxos_under_<label>_old_supply_sats` (BTC-weighted), both exposed at
+// /day1 resolution. Note that BRK uses "1h" as the smallest cumulative
+// band — there is no utxos_under_1d series. Linear interpolation fills
+// gaps between edges.
 const BANDS = [
   ["1h",  1/24], ["1w",     7], ["1m",    30], ["2m",    60], ["3m",    90],
   ["4m",   120], ["5m",   150], ["6m",   180], ["1y",   365], ["2y",   730],
@@ -247,12 +282,16 @@ function valueAtIdx(series, idx) {
 // AGE-BAND INTERPOLATION
 // ════════════════════════════════════════════════════════════════════════════
 //
-// BRK exposes utxos_under_X_old_utxo_count only at the discrete band edges
-// listed in BANDS[]. To evaluate the cumulative count at an arbitrary age
+// BRK exposes the cumulative-quantity series only at the discrete band edges
+// listed in BANDS[]. To evaluate the cumulative quantity at an arbitrary age
 // `daysX` we linearly interpolate between the two nearest edges. This is
 // reliable below 6 months (band edges spaced 1 month apart) and increasingly
 // approximate beyond, where the gap widens to 6 and 12 months.
-function countUnderDaysAtIdx(daysX, idx) {
+//
+// Returns a count when WEIGHTING="count", or a BTC-sats sum when WEIGHTING="btc".
+// The survival ratio downstream is unitless either way (numerator and
+// denominator share the same units).
+function valueUnderDaysAtIdx(daysX, idx) {
   if (daysX <= 0) return 0;
 
   // Find the lower and upper band edges bracketing daysX.
@@ -265,18 +304,18 @@ function countUnderDaysAtIdx(daysX, idx) {
   // daysX below the smallest band edge: scale the smallest band linearly.
   if (lo == null) {
     if (hi == null) return 0;
-    const upper = valueAtIdx(seriesByMetric[`utxos_under_${hi.label}_old_utxo_count`], idx);
+    const upper = valueAtIdx(seriesByMetric[metricName(hi.label)], idx);
     return Math.max(upper * (daysX / hi.d), 0);
   }
 
   // daysX exactly on a band edge OR above all edges.
   if (hi == null || hi.d === lo.d) {
-    return Math.max(valueAtIdx(seriesByMetric[`utxos_under_${lo.label}_old_utxo_count`], idx), 0);
+    return Math.max(valueAtIdx(seriesByMetric[metricName(lo.label)], idx), 0);
   }
 
   // Interior case: linear interpolation between lo and hi.
-  const a = valueAtIdx(seriesByMetric[`utxos_under_${lo.label}_old_utxo_count`], idx);
-  const b = valueAtIdx(seriesByMetric[`utxos_under_${hi.label}_old_utxo_count`], idx);
+  const a = valueAtIdx(seriesByMetric[metricName(lo.label)], idx);
+  const b = valueAtIdx(seriesByMetric[metricName(hi.label)], idx);
   const w = (daysX - lo.d) / (hi.d - lo.d);
   return Math.max(a + w * (b - a), 0);
 }
@@ -316,14 +355,14 @@ function survivalCurve(epoch, W) {
   const maxT      = Math.min(PHASE_DAYS - W, todayIdx - cohortIdx);
   if (maxT < 1) return [];
 
-  const cohort = countUnderDaysAtIdx(W, cohortIdx);
+  const cohort = valueUnderDaysAtIdx(W, cohortIdx);
   if (!(cohort > 0)) return [];
 
   const points = [{ age: 0, s: 1 }];
   for (let t = 1; t <= maxT; t++) {
     const obsIdx = cohortIdx + t;
-    const upper  = countUnderDaysAtIdx(t + W, obsIdx);
-    const lower  = countUnderDaysAtIdx(t,     obsIdx);
+    const upper  = valueUnderDaysAtIdx(t + W, obsIdx);
+    const lower  = valueUnderDaysAtIdx(t,     obsIdx);
     const n      = Math.max(upper - lower, 0);
     points.push({ age: t, s: n / cohort });
   }
@@ -401,11 +440,26 @@ const chart = LightweightCharts.createChart(document.getElementById("chart"), {
 // RENDER
 // ════════════════════════════════════════════════════════════════════════════
 
-const status     = document.getElementById("status");
-const windowSel  = document.getElementById("window-select");
-const legendEl   = document.getElementById("chart-legend");
+const status      = document.getElementById("status");
+const windowSel   = document.getElementById("window-select");
+const weightSel   = document.getElementById("weighting-select");
+const yLabelEl    = document.getElementById("y-axis-label-text");
+const legendEl    = document.getElementById("chart-legend");
 
-const metricsToFetch = BANDS.map(([label]) => `utxos_under_${label}_old_utxo_count`);
+// Returns the 19 metric names for a given weighting mode.
+function metricsForMode(mode) {
+  return BANDS.map(([label]) => metricName(label, mode));
+}
+
+// Track which weighting modes have been fetched into seriesByMetric so we
+// can skip re-fetching on a toggle back-and-forth.
+const loadedModes = new Set();
+
+// Y-axis label text per mode.
+const Y_LABEL = {
+  count: "Survival rate (% of cohort UTXOs still un-spent)",
+  btc:   "Survival rate (% of cohort BTC still un-spent)",
+};
 
 let renderedSeries = [];
 
@@ -452,7 +506,30 @@ function render() {
   }
 
   chart.timeScale().fitContent();
-  status.textContent = `Done. W=${ONBOARDING_W}d. Survival horizon = 0..${PHASE_DAYS - ONBOARDING_W}d post-onboarding.`;
+  if (yLabelEl) yLabelEl.textContent = Y_LABEL[WEIGHTING];
+  const modeName = WEIGHTING === "btc" ? "BTC-weighted" : "count-weighted";
+  status.textContent = `Done. W=${ONBOARDING_W}d, ${modeName}. Survival horizon = 0..${PHASE_DAYS - ONBOARDING_W}d post-onboarding.`;
+}
+
+// Ensure all 19 BRK series for a given weighting mode are in seriesByMetric.
+// On first call for a mode, fetches in parallel; subsequent calls are a no-op.
+async function ensureModeLoaded(mode) {
+  if (loadedModes.has(mode)) return true;
+  const metrics = metricsForMode(mode);
+  status.textContent = `Fetching 0/${metrics.length} BRK series (${mode === "btc" ? "BTC" : "count"} mode) ...`;
+  const results = await fetchMany(metrics, (done, total) => {
+    status.textContent = `Fetching ${done}/${total} BRK series (${mode === "btc" ? "BTC" : "count"} mode) ...`;
+  });
+  for (let i = 0; i < metrics.length; i++) {
+    if (results[i]) seriesByMetric[metrics[i]] = results[i];
+  }
+  const missing = metrics.filter(m => !seriesByMetric[m]);
+  if (missing.length > 0) {
+    status.textContent = `Missing series: ${missing.join(", ")}. Cannot proceed in ${mode} mode.`;
+    return false;
+  }
+  loadedModes.add(mode);
+  return true;
 }
 
 buildLegend();
@@ -462,18 +539,8 @@ buildLegend();
 // ════════════════════════════════════════════════════════════════════════════
 
 (async () => {
-  status.textContent = `Fetching 0/${metricsToFetch.length} BRK series ...`;
-  const results = await fetchMany(metricsToFetch, (done, total) => {
-    status.textContent = `Fetching ${done}/${total} BRK series ...`;
-  });
-  for (let i = 0; i < metricsToFetch.length; i++) {
-    if (results[i]) seriesByMetric[metricsToFetch[i]] = results[i];
-  }
-  const missing = metricsToFetch.filter(m => !seriesByMetric[m]);
-  if (missing.length > 0) {
-    status.textContent = `Missing series: ${missing.join(", ")}. Cannot proceed.`;
-    return;
-  }
+  const ok = await ensureModeLoaded(WEIGHTING);
+  if (!ok) return;
   status.textContent = `Computing K-M curves for ${EPOCHS.length} epochs (W=${ONBOARDING_W}d) ...`;
   await new Promise(r => setTimeout(r, 50));
   render();
@@ -482,6 +549,14 @@ buildLegend();
 windowSel.addEventListener("change", () => {
   ONBOARDING_W = parseInt(windowSel.value, 10);
   status.textContent = `Recomputing for W=${ONBOARDING_W}d ...`;
+  setTimeout(render, 50);
+});
+
+weightSel.addEventListener("change", async () => {
+  WEIGHTING = weightSel.value;
+  const ok = await ensureModeLoaded(WEIGHTING);
+  if (!ok) return;
+  status.textContent = `Recomputing in ${WEIGHTING === "btc" ? "BTC" : "count"} mode ...`;
   setTimeout(render, 50);
 });
 
