@@ -135,8 +135,8 @@ attribution appreciated but not required. See [LICENSE](LICENSE).
 
 ## Credits
 
-- **Bitcoin Research Kit (BRK)**: open-source Bitcoin indexer by Antoine
-  Le Calvez et al. — [github.com/bitcoinresearchkit/brk](https://github.com/bitcoinresearchkit/brk)
+- **Bitcoin Research Kit (BRK)**: open-source Bitcoin indexer —
+  [github.com/bitcoinresearchkit/brk](https://github.com/bitcoinresearchkit/brk)
 - **TradingView Lightweight Charts**: open-source charting library
 - **Kaplan-Meier**: Edward L. Kaplan & Paul Meier (1958), *Nonparametric
   estimation from incomplete observations*, JASA 53(282).
