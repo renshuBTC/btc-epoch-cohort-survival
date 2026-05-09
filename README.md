@@ -7,7 +7,7 @@ day each calendar day so Epoch 5's curve is always plotted up to today,
 with prior epochs truncated to the same days-since-halving point for fair
 comparison.
 
-**Live demo:** [your-username.github.io/your-repo/](https://your-username.github.io/your-repo/)
+**Live demo:** [renshubtc.github.io/btc-epoch-cohort-survival/](https://renshubtc.github.io/btc-epoch-cohort-survival/)
 
 ## What it shows
 
