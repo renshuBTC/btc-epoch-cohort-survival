@@ -1,0 +1,495 @@
+<!doctype html>
+<!--
+  Stratified Kaplan-Meier — Bitcoin new-buyer cohort survival by halving epoch
+  ────────────────────────────────────────────────────────────────────────────
+  Single-file, dependency-light analysis page. Pulls public on-chain data
+  from a Bitcoin Research Kit (BRK) deployment, derives a per-epoch
+  new-buyer cohort, and plots the Kaplan-Meier survival curve for each
+  cohort over a 0 .. (T − W) day post-onboarding horizon, where T is the
+  number of days the current epoch (Epoch 5) has been in progress. T
+  recomputes on every page load so the chart automatically extends by one
+  day each calendar day — Epoch 5's curve is always plotted up to today,
+  and prior epochs are truncated to the same days-since-halving point for
+  fair cross-epoch comparison.
+
+  Data source
+  ───────────
+  All inputs are pulled from a single BRK endpoint family at /api/series:
+      utxos_under_<BAND>_old_utxo_count   (one series per BAND in BANDS[])
+
+  Each series gives, at daily resolution, the integer count of UTXOs that
+  were younger than BAND days at that day. Linear interpolation between
+  band edges fills the gaps between BRK's discrete bands (1h, 1w, 1m, 2m,
+  3m, 4m, 5m, 6m, 1y, 2y, …).
+
+  Math
+  ────
+  For epoch N (halving date H_N) with onboarding window W days, evaluated
+  through follow-up day t in [0, T − W] where T = days(today − Halving 4):
+      n(0) = count of UTXOs aged 0..W at observation H_N+W       (cohort)
+      n(t) = count of UTXOs aged t..t+W at observation H_N+W+t   (survivors)
+      d(t) = n(t-1) − n(t)                                       (events)
+      S(t) = ∏_{τ ≤ t} (1 − d(τ)/n(τ-1))                          (K-M)
+  Algebraically S(t) = n(t)/n(0) given no within-window censoring (true
+  here). Tiny upward wiggles from band interpolation are clamped to a
+  running minimum so the curve stays monotone non-increasing per K-M.
+
+  Caveats
+  ───────
+  - "New buyer" is a UTXO proxy: includes coinbase, change outputs, and
+    exchange-internal moves. Cross-epoch comparison stays valid because
+    the same noise distribution applies to each epoch.
+  - Linear interpolation between band edges is reliable below 6 months
+    (1-month gaps); past 6m the gaps widen to 6 and 12 months.
+  - Independence assumption violated (whales/exchanges spend many UTXOs
+    at once) — variance of S(t) is underestimated. This file omits CI
+    bands and significance tests deliberately for clarity.
+  - Epoch 1 is excluded from the chart: 2009-2010 supply is so small
+    that the cohort denominator is unstable.
+
+  License: CC0 — public domain. Free to use, modify, redistribute.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stratified Kaplan-Meier — Bitcoin new-buyer cohort survival by halving epoch</title>
+<meta name="description" content="Stratified Kaplan-Meier survival curves for Bitcoin new-buyer cohorts across the five halving epochs, evaluated at the same days-since-halving point that Epoch 5 has reached today. Derived from BRK (Bitcoin Research Kit) age-band UTXO count series.">
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --panel: #141414;
+    --border: #2a2a2a;
+    --text: #e8e8e8;
+    --muted: #888;
+    --orange: #f7931a;
+    --c1: rgba(140,140,140,0.85);
+    --c2: rgba(140,180,220,0.95);
+    --c3: rgba(180,210,140,0.95);
+    --c4: rgba(230,200,120,0.95);
+    --c5: var(--orange);
+  }
+  html, body { background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    margin: 0; padding: 0; }
+  body { display: flex; padding: 20px; min-height: 100vh; box-sizing: border-box; }
+  body > .chart-wrap { flex: 1; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 6px 0; }
+  p  { font-size: 12px; line-height: 1.55; color: var(--muted); margin: 0 0 8px 0; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 3px; background: rgba(247,147,26,0.12); color: var(--orange); font-size: 10px; font-weight: 600; letter-spacing: 0.05em; vertical-align: middle; }
+  .chart-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 18px; display: flex; flex-direction: column; min-height: 600px; }
+  .chart-with-axes { flex: 1; display: flex; flex-direction: row; min-height: 540px; }
+  .chart-and-x { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #chart { flex: 1; min-height: 510px; }
+  .x-axis-label { height: 24px; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: #ffffff; font-weight: 500; letter-spacing: 0.03em; }
+  .y-axis-label { width: 22px; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: #ffffff; font-weight: 500; letter-spacing: 0.03em; }
+  .y-axis-label > span { transform: rotate(-90deg); white-space: nowrap; display: inline-block; }
+  .status { font-size: 11px; color: var(--muted); padding: 6px 0; font-variant-numeric: tabular-nums; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text); font-size: 11px; }
+  .control-row { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .control-row select { background: #0a0a0a; color: var(--text); border: 1px solid var(--border);
+    padding: 3px 8px; font: inherit; border-radius: 2px; }
+  /* Top legend: color-coded epoch names. Sits above the chart so the
+     line-endpoint labels are free to display the actual survival value. */
+  .chart-legend { display: flex; flex-wrap: wrap; gap: 18px; padding: 4px 0 12px 0;
+    font-size: 12px; color: var(--text); border-bottom: 1px solid var(--border);
+    margin-bottom: 10px; }
+  .chart-legend .legend-item { display: inline-flex; align-items: center; gap: 8px; }
+  .chart-legend .dot { display: inline-block; width: 16px; height: 3px; border-radius: 1px; flex: none; }
+  .source-line { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  .source-line a { color: var(--orange); text-decoration: none; }
+  .source-line a:hover { text-decoration: underline; }
+</style>
+<script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+
+<div class="chart-wrap">
+  <h1>Stratified Kaplan-Meier — Bitcoin new-buyer cohort survival by halving epoch</h1>
+  <p>Five Kaplan-Meier survival curves, one per halving epoch. For each epoch, the cohort is the set of UTXOs born in the first <i>W</i> days post-halving and still un-spent at the close of that onboarding window. Each curve tracks the fraction of that cohort still un-spent through day <code>(T − W)</code> post-onboarding, where <code>T = <span id="phase-days-display">…</span></code> days is how long Epoch 5 has been in progress. The chart extends by one day each calendar day — Epoch 5 always sits at the right edge, prior epochs are truncated to the same days-since-halving point for fair comparison.</p>
+  <div class="control-row">
+    <label>Onboarding window&nbsp;<i>W</i>:&nbsp;
+      <select id="window-select">
+        <option value="30">30 days</option>
+        <option value="60">60 days</option>
+        <option value="90" selected>90 days</option>
+        <option value="180">180 days</option>
+      </select>
+    </label>
+  </div>
+  <div class="chart-legend" id="chart-legend"></div>
+  <div class="chart-with-axes">
+    <div class="chart-and-x">
+      <div id="chart"></div>
+      <div class="x-axis-label">Days post-onboarding</div>
+    </div>
+    <div class="y-axis-label"><span>Survival rate (% of cohort still un-spent)</span></div>
+  </div>
+  <div class="status" id="status">Loading BRK count series ...</div>
+  <div class="source-line">
+    Data: <a href="https://bitview.space/api" target="_blank" rel="noopener">bitview.space</a>
+    (Bitcoin Research Kit). All series fetched live at page-load from the
+    <code>utxos_under_X_old_utxo_count</code> family at <code>/api/series/&lt;name&gt;/day1</code>.
+    Source code: open in your browser's <i>View Source</i>; CC0, no rights reserved.
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ════════════════════════════════════════════════════════════════════════════
+// CONFIG
+// ════════════════════════════════════════════════════════════════════════════
+
+const BRK_API_BASE = "https://bitview.space/api/series";
+const BRK_INDEX    = "day1";        // daily resolution
+const CONCURRENCY  = 12;            // parallel fetch workers
+const GENESIS      = new Date(Date.UTC(2009, 0, 3));
+const DAY_MS       = 86400000;
+const TODAY        = (() => { const d = new Date(); d.setUTCHours(0,0,0,0); return d; })();
+
+// Halving dates. Each epoch starts on its halving block; epoch 1 starts
+// at the genesis block. Epoch 5 is in progress.
+const HALVING_DATES = [
+  new Date(Date.UTC(2009,  0,  3)), // Epoch 1: genesis
+  new Date(Date.UTC(2012, 10, 28)), // Epoch 2: halving 1
+  new Date(Date.UTC(2016,  6,  9)), // Epoch 3: halving 2
+  new Date(Date.UTC(2020,  4, 11)), // Epoch 4: halving 3
+  new Date(Date.UTC(2024,  3, 19)), // Epoch 5: halving 4
+];
+
+// Days the current epoch (Epoch 5) has been in progress as of today.
+// Recomputed on every page load — the chart automatically extends by one
+// day each calendar day. All five epochs are evaluated up to this same
+// days-since-halving point so cross-epoch comparison stays fair.
+const PHASE_DAYS = Math.max(1, Math.floor((TODAY - HALVING_DATES[4]) / DAY_MS));
+
+let ONBOARDING_W   = 90;            // mutable via #window-select dropdown
+
+const EPOCHS = [
+  { num: 1, name: "Epoch 1",                                                 start: HALVING_DATES[0], color: getCSS("--c1"), width: 2 },
+  { num: 2, name: "Epoch 2",                                                 start: HALVING_DATES[1], color: getCSS("--c2"), width: 2 },
+  { num: 3, name: "Epoch 3",                                                 start: HALVING_DATES[2], color: getCSS("--c3"), width: 2 },
+  { num: 4, name: "Epoch 4",                                                 start: HALVING_DATES[3], color: getCSS("--c4"), width: 2 },
+  { num: 5, name: `Epoch 5 (in progress, today is t=${PHASE_DAYS})`,         start: HALVING_DATES[4], color: getCSS("--c5"), width: 3 },
+];
+
+// Surface PHASE_DAYS in the description paragraph so readers can see the
+// current value without inspecting the source.
+{
+  const el = document.getElementById("phase-days-display");
+  if (el) el.textContent = String(PHASE_DAYS);
+}
+
+// BRK age-band edges, in days. Each maps to a series named
+// `utxos_under_<label>_old_utxo_count` exposed at /day1 resolution.
+// Note that BRK uses "1h" as the smallest cumulative band — there is no
+// utxos_under_1d series. Linear interpolation fills gaps between edges.
+const BANDS = [
+  ["1h",  1/24], ["1w",     7], ["1m",    30], ["2m",    60], ["3m",    90],
+  ["4m",   120], ["5m",   150], ["6m",   180], ["1y",   365], ["2y",   730],
+  ["3y",  1095], ["4y",  1460], ["5y",  1825], ["6y",  2190], ["7y",  2555],
+  ["8y",  2920], ["10y", 3650], ["12y", 4380], ["15y", 5475],
+];
+
+// ════════════════════════════════════════════════════════════════════════════
+// HELPERS — DOM, dates, fetch
+// ════════════════════════════════════════════════════════════════════════════
+
+function getCSS(varname) {
+  return getComputedStyle(document.documentElement).getPropertyValue(varname).trim();
+}
+
+// Day index since the Bitcoin genesis block. BRK series are indexed by
+// day starting at index 0 = genesis day, which makes lookups O(1).
+function dayIdx(t) { return Math.floor((t - GENESIS) / DAY_MS); }
+
+// Fetch one BRK series. Returns the parsed JSON object {data: [...], ...}.
+async function fetchOne(metric) {
+  const url = `${BRK_API_BASE}/${metric}/${BRK_INDEX}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${metric}: HTTP ${r.status}`);
+  return await r.json();
+}
+
+// Fetch many BRK series in parallel with bounded concurrency.
+async function fetchMany(metrics, onProgress) {
+  let i = 0, done = 0;
+  const results = new Array(metrics.length);
+  async function worker() {
+    while (i < metrics.length) {
+      const idx = i++;
+      try { results[idx] = await fetchOne(metrics[idx]); }
+      catch (e) { results[idx] = null; console.warn(e.message); }
+      done++; onProgress?.(done, metrics.length);
+    }
+  }
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  return results;
+}
+
+// In-memory cache of fetched BRK series, keyed by metric name.
+const seriesByMetric = {};
+
+// Read a value from a BRK series at a given day index. Treats null and
+// out-of-range values as 0; clamps to the last value for indices past
+// the series end (BRK occasionally lags behind today by a few days).
+function valueAtIdx(series, idx) {
+  if (!series || !series.data) return 0;
+  if (idx < 0) return 0;
+  if (idx >= series.data.length) return Number(series.data[series.data.length - 1] ?? 0);
+  const v = series.data[idx];
+  return (v == null) ? 0 : Number(v);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// AGE-BAND INTERPOLATION
+// ════════════════════════════════════════════════════════════════════════════
+//
+// BRK exposes utxos_under_X_old_utxo_count only at the discrete band edges
+// listed in BANDS[]. To evaluate the cumulative count at an arbitrary age
+// `daysX` we linearly interpolate between the two nearest edges. This is
+// reliable below 6 months (band edges spaced 1 month apart) and increasingly
+// approximate beyond, where the gap widens to 6 and 12 months.
+function countUnderDaysAtIdx(daysX, idx) {
+  if (daysX <= 0) return 0;
+
+  // Find the lower and upper band edges bracketing daysX.
+  let lo = null, hi = null;
+  for (const [label, d] of BANDS) {
+    if (d <= daysX) lo = { label, d };
+    if (d >= daysX && hi == null) hi = { label, d };
+  }
+
+  // daysX below the smallest band edge: scale the smallest band linearly.
+  if (lo == null) {
+    if (hi == null) return 0;
+    const upper = valueAtIdx(seriesByMetric[`utxos_under_${hi.label}_old_utxo_count`], idx);
+    return Math.max(upper * (daysX / hi.d), 0);
+  }
+
+  // daysX exactly on a band edge OR above all edges.
+  if (hi == null || hi.d === lo.d) {
+    return Math.max(valueAtIdx(seriesByMetric[`utxos_under_${lo.label}_old_utxo_count`], idx), 0);
+  }
+
+  // Interior case: linear interpolation between lo and hi.
+  const a = valueAtIdx(seriesByMetric[`utxos_under_${lo.label}_old_utxo_count`], idx);
+  const b = valueAtIdx(seriesByMetric[`utxos_under_${hi.label}_old_utxo_count`], idx);
+  const w = (daysX - lo.d) / (hi.d - lo.d);
+  return Math.max(a + w * (b - a), 0);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// STRATIFIED KAPLAN-MEIER
+// ════════════════════════════════════════════════════════════════════════════
+//
+// For epoch N (halving date H_N) and onboarding window W:
+//
+//   Cohort fixed at observation date τ₀ = H_N + W:
+//     n(0) = countUnderDays(W, τ₀)
+//     ≡ count of UTXOs born in [H_N, H_N+W] AND still un-spent at τ₀.
+//
+//   For each follow-up day t ≥ 0 (observation date d = H_N + W + t):
+//     The cohort UTXOs now have age in [t, t+W] days, so:
+//       n(t) = countUnderDays(t+W, d) − countUnderDays(t, d)
+//     Both endpoints algebraically resolve to the same birth window
+//     [H_N, H_N+W], so the slice tracks exactly the original cohort.
+//
+//   Survival ratio:
+//     S(t) = n(t) / n(0)
+//
+//   Equivalent to the K-M product-limit estimator
+//     S(t) = ∏_{τ ≤ t} (1 − d(τ) / n(τ-1))
+//   when there is no within-window censoring (true here, since all cohort
+//   UTXOs are observed throughout the horizon).
+//
+//   By construction S(0) ≡ 1. K-M survival functions are monotonically
+//   non-increasing; small upward wiggles from band interpolation are
+//   clamped to a running min at the end of the loop.
+//
+function survivalCurve(epoch, W) {
+  const startIdx  = dayIdx(epoch.start);
+  const todayIdx  = dayIdx(TODAY);
+  const cohortIdx = startIdx + W;
+  const maxT      = Math.min(PHASE_DAYS - W, todayIdx - cohortIdx);
+  if (maxT < 1) return [];
+
+  const cohort = countUnderDaysAtIdx(W, cohortIdx);
+  if (!(cohort > 0)) return [];
+
+  const points = [{ age: 0, s: 1 }];
+  for (let t = 1; t <= maxT; t++) {
+    const obsIdx = cohortIdx + t;
+    const upper  = countUnderDaysAtIdx(t + W, obsIdx);
+    const lower  = countUnderDaysAtIdx(t,     obsIdx);
+    const n      = Math.max(upper - lower, 0);
+    points.push({ age: t, s: n / cohort });
+  }
+
+  // Monotonicity clamp: K-M is non-increasing by construction.
+  let running = 1;
+  for (const p of points) {
+    if (p.s > running) p.s = running;
+    else running = p.s;
+  }
+  return points;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CHART
+// ════════════════════════════════════════════════════════════════════════════
+
+const chart = LightweightCharts.createChart(document.getElementById("chart"), {
+  layout: {
+    background: { type: "solid", color: getCSS("--panel") },
+    textColor: getCSS("--text"),
+    fontSize: 11,
+  },
+  grid: {
+    vertLines: { color: getCSS("--border") },
+    horzLines: { color: getCSS("--border") },
+  },
+  rightPriceScale: {
+    borderColor: getCSS("--border"),
+    scaleMargins: { top: 0.05, bottom: 0.05 },
+  },
+  timeScale: {
+    borderColor: getCSS("--border"),
+    timeVisible: false,
+    secondsVisible: false,
+    barSpacing: 1.4,
+    rightOffset: 6,
+    fixLeftEdge: true,
+    fixRightEdge: true,
+    tickMarkFormatter: (time) => {
+      const d = Number(time);
+      if (d === 0)   return "0d";
+      if (d < 60)    return `${d}d`;
+      if (d < 365)   return `${Math.round(d/30)}mo`;
+      if (d === 365) return "1y";
+      return `${(d/365.25).toFixed(1)}y`;
+    },
+  },
+  crosshair: {
+    mode: LightweightCharts.CrosshairMode.Normal,
+    vertLine: {
+      color: getCSS("--muted"), labelVisible: true,
+      labelBackgroundColor: "#1a1a1a",
+      style: LightweightCharts.LineStyle.Dotted,
+    },
+    horzLine: {
+      color: getCSS("--muted"), labelVisible: true,
+      labelBackgroundColor: "#1a1a1a",
+      style: LightweightCharts.LineStyle.Dotted,
+    },
+  },
+  localization: {
+    priceFormatter: (v) => `${(v*100).toFixed(1)}%`,
+    timeFormatter: (t) => {
+      const d = Number(t);
+      const y = d / 365.25;
+      if (d < 30)  return `day ${d} post-onboarding`;
+      if (d < 365) return `day ${d} (${(d/30.4).toFixed(1)}mo) post-onboarding`;
+      return `day ${d} (${y.toFixed(2)}y) post-onboarding`;
+    },
+  },
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// RENDER
+// ════════════════════════════════════════════════════════════════════════════
+
+const status     = document.getElementById("status");
+const windowSel  = document.getElementById("window-select");
+const legendEl   = document.getElementById("chart-legend");
+
+const metricsToFetch = BANDS.map(([label]) => `utxos_under_${label}_old_utxo_count`);
+
+let renderedSeries = [];
+
+// Build the top legend once at boot from the EPOCHS list (excluding E1
+// which is not plotted). Color swatches mirror the chart's series colors.
+function buildLegend() {
+  legendEl.innerHTML = EPOCHS
+    .filter(e => e.num !== 1)
+    .map(e => `<span class="legend-item">` +
+                `<span class="dot" style="background:${e.color};"></span>` +
+                `${e.name}` +
+              `</span>`)
+    .join("");
+}
+
+function render() {
+  // Clear any series from a previous render (e.g. window-size change).
+  for (const s of renderedSeries) {
+    try { chart.removeSeries(s); } catch (e) {}
+  }
+  renderedSeries = [];
+
+  for (const e of EPOCHS) {
+    // Epoch 1's tiny early-history supply makes the cohort denominator
+    // unstable. Excluded from the chart for legibility.
+    if (e.num === 1) continue;
+
+    const points = survivalCurve(e, ONBOARDING_W);
+    if (points.length < 2) continue;
+
+    const data = points.map(p => ({ time: p.age, value: p.s }));
+    // lastValueVisible: true ⇒ the line-endpoint label shows the survival
+    // PERCENTAGE (formatted by the chart's priceFormatter). Series identity
+    // is conveyed by the top legend, so no `title` is set.
+    const ls = chart.addSeries(LightweightCharts.LineSeries, {
+      color: e.color,
+      lineWidth: e.width,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+      lastValueVisible: true,
+      priceLineVisible: false,
+    });
+    ls.setData(data);
+    renderedSeries.push(ls);
+  }
+
+  chart.timeScale().fitContent();
+  status.textContent = `Done. W=${ONBOARDING_W}d. Survival horizon = 0..${PHASE_DAYS - ONBOARDING_W}d post-onboarding.`;
+}
+
+buildLegend();
+
+// ════════════════════════════════════════════════════════════════════════════
+// BOOT
+// ════════════════════════════════════════════════════════════════════════════
+
+(async () => {
+  status.textContent = `Fetching 0/${metricsToFetch.length} BRK series ...`;
+  const results = await fetchMany(metricsToFetch, (done, total) => {
+    status.textContent = `Fetching ${done}/${total} BRK series ...`;
+  });
+  for (let i = 0; i < metricsToFetch.length; i++) {
+    if (results[i]) seriesByMetric[metricsToFetch[i]] = results[i];
+  }
+  const missing = metricsToFetch.filter(m => !seriesByMetric[m]);
+  if (missing.length > 0) {
+    status.textContent = `Missing series: ${missing.join(", ")}. Cannot proceed.`;
+    return;
+  }
+  status.textContent = `Computing K-M curves for ${EPOCHS.length} epochs (W=${ONBOARDING_W}d) ...`;
+  await new Promise(r => setTimeout(r, 50));
+  render();
+})();
+
+windowSel.addEventListener("change", () => {
+  ONBOARDING_W = parseInt(windowSel.value, 10);
+  status.textContent = `Recomputing for W=${ONBOARDING_W}d ...`;
+  setTimeout(render, 50);
+});
+
+window.addEventListener("resize", () => {
+  const el = document.getElementById("chart");
+  chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+});
+</script>
+
+</body>
+</html>
