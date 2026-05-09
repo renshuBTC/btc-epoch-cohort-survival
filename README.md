@@ -7,7 +7,7 @@ day each calendar day so Epoch 5's curve is always plotted up to today,
 with prior epochs truncated to the same days-since-halving point for fair
 comparison.
 
-**Live demo:** [renshubtc.github.io/btc-epoch-cohort-survival/](https://renshubtc.github.io/btc-epoch-cohort-survival/)
+**Live demo:** [your-username.github.io/your-repo/](https://your-username.github.io/your-repo/)
 
 ## What it shows
 
@@ -117,7 +117,3 @@ attribution appreciated but not required. See [LICENSE](LICENSE).
 - **TradingView Lightweight Charts**: open-source charting library
 - **Kaplan-Meier**: Edward L. Kaplan & Paul Meier (1958), *Nonparametric
   estimation from incomplete observations*, JASA 53(282).
-
----
-
-Built as part of [bitcointerminal.net](https://bitcointerminal.net).
